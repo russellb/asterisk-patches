@@ -1,0 +1,530 @@
+Index: funcs/func_enum.c
+===================================================================
+--- funcs/func_enum.c	(revision 86274)
++++ funcs/func_enum.c	(working copy)
+@@ -6,6 +6,7 @@
+  * Mark Spencer <markster@digium.com>
+  * Oleksiy Krivoshey <oleksiyk@gmail.com>
+  * Russell Bryant <russelb@clemson.edu>
++ * Brett Bryant <bbryant@digium.com>
+  *
+  * See http://www.asterisk.org for more information about
+  * the Asterisk project. Please do not directly contact
+@@ -25,6 +26,7 @@
+  * \author Mark Spencer <markster@digium.com>
+  * \author Oleksiy Krivoshey <oleksiyk@gmail.com>
+  * \author Russell Bryant <russelb@clemson.edu>
++ * \author Brett Bryant <bbryant@digium.com>
+  *
+  * \arg See also AstENUM
+  */
+@@ -48,7 +50,7 @@
+ #include "asterisk/enum.h"
+ #include "asterisk/app.h"
+ 
+- static char *synopsis = "Syntax: ENUMLOOKUP(number[|Method-type[|options[|record#[|zone-suffix]]]])\n";
++static char *synopsis = "Syntax: ENUMLOOKUP(number[|Method-type[|options[|record#[|zone-suffix]]]])\n";
+ 
+ static int function_enum(struct ast_channel *chan, char *cmd, char *data,
+ 			 char *buf, size_t len)
+@@ -103,8 +105,7 @@
+ 
+ 	}
+ 
+-	res = ast_get_enum(chan, num, dest, sizeof(dest), tech, sizeof(tech), args.zone,
+-			   args.options, record);
++	res = ast_get_enum(chan, num, dest, sizeof(dest), tech, sizeof(tech), args.zone, args.options, 1, NULL);
+ 
+ 	p = strchr(dest, ':');
+ 	if (p && strcasecmp(tech, "ALL"))
+@@ -117,6 +118,219 @@
+ 	return 0;
+ }
+ 
++unsigned int enum_datastore_id;
++
++struct enum_result_datastore {
++	struct enum_context *context;
++	unsigned int id;
++};
++
++static void erds_destroy(struct enum_result_datastore *data) 
++{
++	int k;
++
++	for (k = 0; k < data->context->naptr_rrs_count; k++) {
++		free(data->context->naptr_rrs[k].result);
++		free(data->context->naptr_rrs[k].tech);
++	}
++
++	free(data->context->naptr_rrs);
++	free(data->context);
++	free(data);
++}
++
++static void erds_destroy_cb(void *data) 
++{
++	struct enum_result_datastore *erds = data;
++	erds_destroy(erds);
++}
++
++const struct ast_datastore_info enum_result_datastore_info = {
++	.type = "ENUMQUERY",
++	.destroy = erds_destroy_cb,
++}; 
++
++static int enum_query_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
++{
++	struct enum_result_datastore *erds;
++	struct ast_datastore *datastore;
++	struct ast_module_user *u;
++	char *parse, tech[128], dest[128];
++	int res = -1;
++
++	AST_DECLARE_APP_ARGS(args,
++		AST_APP_ARG(number);
++		AST_APP_ARG(tech);
++		AST_APP_ARG(zone);
++	);
++
++	u = ast_module_user_add(chan);
++
++	if (ast_strlen_zero(data)) {
++		ast_log(LOG_WARNING, "ENUMQUERY requires at least a number as an argument...\n");
++		goto finish;
++	}
++
++	parse = ast_strdupa(data);
++    
++	AST_STANDARD_APP_ARGS(args, parse);
++
++	if (!chan) {
++		ast_log(LOG_ERROR, "ENUMQUERY cannot be used without a channel!\n");
++		goto finish;
++	}
++
++	if (!args.zone)
++		args.zone = "e164.zone";
++
++	ast_copy_string(tech, args.tech ? args.tech : "sip", sizeof(tech));
++
++	if (!(erds = ast_calloc(1, sizeof(*erds))))
++		goto finish;
++
++	if (!(erds->context = ast_calloc(1, sizeof(*erds->context)))) {
++		free(erds);
++		goto finish;
++	}
++
++	erds->id = ast_atomic_fetchadd_int((int *) &enum_datastore_id, 1);
++
++	snprintf(buf, len, "%u", erds->id);
++
++	if (!(datastore = ast_channel_datastore_alloc(&enum_result_datastore_info, buf))) {
++		free(erds->context);
++		free(erds);
++		goto finish;
++	}
++
++	ast_get_enum(chan, args.number, dest, sizeof(dest), tech, sizeof(tech), args.zone, "", 1, &erds->context);
++
++	datastore->data = erds;
++
++	ast_channel_lock(chan);
++	ast_channel_datastore_add(chan, datastore);
++	ast_channel_unlock(chan);
++   
++	res = 0;
++    
++finish:
++	ast_module_user_remove(u);
++
++	return res;
++}
++
++static int enum_result_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
++{
++	struct ast_module_user *u;
++	struct enum_result_datastore *erds;
++	struct ast_datastore *datastore;
++	char *parse, *p;
++	unsigned int num;
++	int res = -1, k;
++	AST_DECLARE_APP_ARGS(args, 
++		AST_APP_ARG(id);
++		AST_APP_ARG(resultnum);
++	);
++
++	u = ast_module_user_add(chan);
++
++	if (ast_strlen_zero(data)) {
++		ast_log(LOG_WARNING, "ENUMRESULT requires two arguments (id and resultnum)\n");
++		goto finish;
++	}
++
++	if (!chan) {
++		ast_log(LOG_ERROR, "ENUMRESULT can not be used without a channel!\n");
++		goto finish;
++	}
++   
++	parse = ast_strdupa(data);
++
++	AST_STANDARD_APP_ARGS(args, parse);
++
++	if (ast_strlen_zero(args.id)) {
++		ast_log(LOG_ERROR, "A result ID must be provided to ENUMRESULT\n");
++		goto finish;
++	}
++
++	if (ast_strlen_zero(args.resultnum)) {
++		ast_log(LOG_ERROR, "A result number must be given to ENUMRESULT!\n");
++		goto finish;
++	}
++
++	ast_channel_lock(chan);
++	datastore = ast_channel_datastore_find(chan, &enum_result_datastore_info, args.id);
++	ast_channel_unlock(chan);
++	if (!datastore) {
++		ast_log(LOG_WARNING, "No ENUM results found for query id!\n");
++		goto finish;
++	}
++
++	erds = datastore->data;
++
++	if (!strcasecmp(args.resultnum, "getnum")) {
++		snprintf(buf, len, "%u", erds->context->naptr_rrs_count);
++		res = 0;
++		goto finish;
++	}
++
++	if (sscanf(args.resultnum, "%u", &num) != 1) {
++		ast_log(LOG_ERROR, "Invalid value '%s' for resultnum to ENUMRESULT!\n", args.resultnum);
++		goto finish;
++	}
++
++	if (!num || num > erds->context->naptr_rrs_count) {
++		ast_log(LOG_WARNING, "Result number %u is not valid for ENUM query results for ID %s!\n", num, args.id);
++		goto finish;
++	}
++
++	for (k = 0; k < erds->context->naptr_rrs_count; k++) {
++		if (num - 1 != erds->context->naptr_rrs[k].sort_pos)
++			continue;
++
++		p = strchr(erds->context->naptr_rrs[k].result, ':');
++              
++		if (p && strcasecmp(erds->context->naptr_rrs[k].tech, "ALL"))
++			ast_copy_string(buf, p + 1, len);
++		else
++			ast_copy_string(buf, erds->context->naptr_rrs[k].result, len);
++
++		break;
++	}
++
++	res = 0;
++
++finish:
++	ast_module_user_remove(u);
++
++	return res;
++}
++
++static struct ast_custom_function enum_query_function = {
++	.name = "ENUMQUERY",
++	.synopsis = "Initiate an ENUM query",
++	.syntax = "ENUMQUERY(number[|Method-type[|zone-suffix]])",
++	.desc = "This will do a ENUM lookup of the given phone number.\n"
++	"If no method-tpye is given, the default will be sip. If no\n"
++	"zone-suffix is given, the default will be \"e164.arpa\".\n"
++	"The result of this function will be a numeric ID that can\n"
++	"be used to retrieve the results using the ENUMRESULT function.\n",
++	.read = enum_query_read,
++};
++
++static struct ast_custom_function enum_result_function = {
++	.name = "ENUMRESULT",
++	.synopsis = "Retrieve results from a ENUMQUERY",
++	.syntax = "ENUMRESULT(id|resultnum)",
++	.desc = "This function will retrieve results from a previous use\n"
++	"of the ENUMQUERY function.\n"
++	"  id - This argument is the identifier returned by the ENUMQUERY function.\n"
++	"  resultnum - This is the number of the result that you want to retrieve.\n"
++	"       Results start at 1.  If this argument is specified as \"getnum\",\n"
++	"       then it will return the total number of results that are available.\n",
++	.read = enum_result_read,
++};
++
+ static struct ast_custom_function enum_function = {
+ 	.name = "ENUMLOOKUP",
+ 	.synopsis =
+@@ -177,6 +391,8 @@
+ {
+ 	int res = 0;
+ 
++	res |= ast_custom_function_unregister(&enum_result_function);
++	res |= ast_custom_function_unregister(&enum_query_function);
+ 	res |= ast_custom_function_unregister(&enum_function);
+ 	res |= ast_custom_function_unregister(&txtcidname_function);
+ 
+@@ -189,6 +405,8 @@
+ {
+ 	int res = 0;
+ 
++	res |= ast_custom_function_register(&enum_result_function);
++	res |= ast_custom_function_register(&enum_query_function);
+ 	res |= ast_custom_function_register(&enum_function);
+ 	res |= ast_custom_function_register(&txtcidname_function);
+ 
+Index: include/asterisk/enum.h
+===================================================================
+--- include/asterisk/enum.h	(revision 86274)
++++ include/asterisk/enum.h	(working copy)
+@@ -25,6 +25,33 @@
+ 
+ #include "asterisk/channel.h"
+ 
++struct naptr {
++	unsigned short order;
++	unsigned short pref;
++} __attribute__ ((__packed__));
++
++struct enum_naptr_rr {
++	struct naptr naptr; /*!< order and preference of RR */
++	char *result;       /*!< result of naptr parsing,e.g.: tel:+5553 */
++	char *tech;         /*!< Technology (from URL scheme) */
++	int sort_pos;       /*!< sort position */
++};
++
++struct enum_context {
++	char *dst;                       /*!< Destination part of URL from ENUM */
++	int dstlen;                      /*!< Length */
++	char *tech;                      /*!< Technology (from URL scheme) */
++	int techlen;                     /*!< Length */
++	char *txt;                       /*!< TXT record in TXT lookup */
++	int txtlen;                      /*!< Length */
++	char *naptrinput;                /*!< The number to lookup */
++	int position;                    /*!< used as counter for RRs or specifies position of required RR */
++	int options;                     /*!< options , see ENUMLOOKUP_OPTIONS_* defined above */
++	struct enum_naptr_rr *naptr_rrs; /*!< array of parsed NAPTR RRs */
++	int naptr_rrs_count;             /*!< Size of array naptr_rrs */
++};
++
++
+ /*! \brief Lookup entry in ENUM Returns 1 if found, 0 if not found, -1 on hangup
+ 	\param chan	Channel
+ 	\param number   E164 number with or without the leading +
+@@ -37,9 +64,10 @@
+ 	\param suffix   Zone suffix (if is NULL then use enum.conf 'search' variable)
+ 	\param options  Options ('c' to count number of NAPTR RR)
+ 	\param record   The position of required RR in the answer list
++	\param argcontext   Argument for caching results into an enum_context pointer (NULL is used for not caching)
+ */
+ int ast_get_enum(struct ast_channel *chan, const char *number, char *location, int maxloc, char *technology, 
+-		int maxtech, char* suffix, char* options, unsigned int record);
++		int maxtech, char* suffix, char* options, unsigned int record, struct enum_context **argcontext);
+ 
+ /*!	\brief Lookup DNS TXT record (used by app TXTCIDnum
+ 	\param chan	Channel
+Index: main/enum.c
+===================================================================
+--- main/enum.c	(revision 86274)
++++ main/enum.c	(working copy)
+@@ -89,11 +89,6 @@
+ 
+ AST_MUTEX_DEFINE_STATIC(enumlock);
+ 
+-struct naptr {
+-	unsigned short order;
+-	unsigned short pref;
+-} __attribute__ ((__packed__));
+-
+ /*! \brief Parse NAPTR record information elements */
+ static unsigned int parse_ie(char *data, unsigned int maxdatalen, unsigned char *src, unsigned int srclen)
+ {
+@@ -296,27 +291,7 @@
+ /* do not return requested value, just count RRs and return thei number in dst */
+ #define ENUMLOOKUP_OPTIONS_COUNT       1
+ 
+-struct enum_naptr_rr {
+-	struct naptr naptr; /* order and preference of RR */
+-	char *result; /* result of naptr parsing,e.g.: tel:+5553 */
+-	char *tech; /* Technology (from URL scheme) */
+-	int sort_pos; /* sort position */
+-};
+ 
+-struct enum_context {
+-	char *dst;	/* Destination part of URL from ENUM */
+-	int dstlen;	/* Length */
+-	char *tech;	/* Technology (from URL scheme) */
+-	int techlen;	/* Length */
+-	char *txt;	/* TXT record in TXT lookup */
+-	int txtlen;	/* Length */
+-	char *naptrinput;	/* The number to lookup */
+-	int position; /* used as counter for RRs or specifies position of required RR */
+-	int options; /* options , see ENUMLOOKUP_OPTIONS_* defined above */
+-	struct enum_naptr_rr *naptr_rrs; /* array of parsed NAPTR RRs */
+-	int naptr_rrs_count; /* Size of array naptr_rrs */
+-};
+-
+ /*! \brief Callback for TXT record lookup */
+ static int txt_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer)
+ {
+@@ -387,9 +362,9 @@
+ }
+ 
+ /*! \brief ENUM lookup */
+-int ast_get_enum(struct ast_channel *chan, const char *number, char *dst, int dstlen, char *tech, int techlen, char* suffix, char* options, unsigned int record)
++int ast_get_enum(struct ast_channel *chan, const char *number, char *dst, int dstlen, char *tech, int techlen, char* suffix, char* options, unsigned int record, struct enum_context **argcontext)
+ {
+-	struct enum_context context;
++	struct enum_context *context;
+ 	char tmp[259 + 512];
+ 	char naptrinput[512];
+ 	int pos = strlen(number) - 1;
+@@ -404,27 +379,30 @@
+ 	int i = 0;
+ 	int z = 0;
+ 
++	if (!(context = ast_calloc(1, sizeof(*context))))
++		return -1;
++
+ 	ast_copy_string(naptrinput, number[0] == 'n' ? number+1 : number, sizeof(naptrinput));
+ 
+-	context.naptrinput = naptrinput;	/* The number */
+-	context.dst = dst;			/* Return string */
+-	context.dstlen = dstlen;
+-	context.tech = tech;
+-	context.techlen = techlen;
+-	context.options = 0;
+-	context.position = record;
+-	context.naptr_rrs = NULL;
+-	context.naptr_rrs_count = 0;
++	context->naptrinput = naptrinput;	/* The number */
++	context->dst = dst;			/* Return string */
++	context->dstlen = dstlen;
++	context->tech = tech;
++	context->techlen = techlen;
++	context->options = 0;
++	context->position = record;
++	context->naptr_rrs = NULL;
++	context->naptr_rrs_count = 0;
+ 
+ 	if (options != NULL) {
+ 		if (*options == 'c') {
+-			context.options = ENUMLOOKUP_OPTIONS_COUNT;
+-			context.position = 0;
++			context->options = ENUMLOOKUP_OPTIONS_COUNT;
++			context->position = 0;
+ 		}
+ 	}
+ 
+ 	ast_log(LOG_DEBUG, "ast_get_enum(): n='%s', tech='%s', suffix='%s', options='%d', record='%d'\n",
+-			number, tech, suffix, context.options, context.position);
++			number, tech, suffix, context->options, context->position);
+ 
+ 	if (pos > 128)
+ 		pos = 128;
+@@ -462,12 +440,14 @@
+ 		}
+ 	}
+ 
+-	if (chan && ast_autoservice_start(chan) < 0)
++	if (chan && ast_autoservice_start(chan) < 0) {
++		free(context);
+ 		return -1;
++	}
+ 
+-	if(suffix) {
++	if (suffix) {
+ 		ast_copy_string(tmp + newpos, suffix, sizeof(tmp) - newpos);
+-		ret = ast_search_dns(&context, tmp, C_IN, T_NAPTR, enum_callback);
++		ret = ast_search_dns(context, tmp, C_IN, T_NAPTR, enum_callback);
+ 		ast_log(LOG_DEBUG, "ast_get_enum: ast_search_dns(%s) returned %d\n", tmp, ret);
+ 	} else {
+ 		ret = -1;		/* this is actually dead code since the demise of app_enum.c */
+@@ -499,52 +479,55 @@
+ 		ret = 0;
+ 	}
+ 
+-	if (context.naptr_rrs_count >= context.position && ! (context.options & ENUMLOOKUP_OPTIONS_COUNT)) {
++	if (context->naptr_rrs_count >= context->position && ! (context->options & ENUMLOOKUP_OPTIONS_COUNT)) {
+ 		/* sort array by NAPTR order/preference */
+-		for (k = 0; k < context.naptr_rrs_count; k++) {
+-			for (i = 0; i < context.naptr_rrs_count; i++) {
++		for (k = 0; k < context->naptr_rrs_count; k++) {
++			for (i = 0; i < context->naptr_rrs_count; i++) {
+ 				/* use order first and then preference to compare */
+-				if ((ntohs(context.naptr_rrs[k].naptr.order) < ntohs(context.naptr_rrs[i].naptr.order)
+-						&& context.naptr_rrs[k].sort_pos > context.naptr_rrs[i].sort_pos)
+-					|| (ntohs(context.naptr_rrs[k].naptr.order) > ntohs(context.naptr_rrs[i].naptr.order)
+-						&& context.naptr_rrs[k].sort_pos < context.naptr_rrs[i].sort_pos)){
+-					z = context.naptr_rrs[k].sort_pos;
+-					context.naptr_rrs[k].sort_pos = context.naptr_rrs[i].sort_pos;
+-					context.naptr_rrs[i].sort_pos = z;
++				if ((ntohs(context->naptr_rrs[k].naptr.order) < ntohs(context->naptr_rrs[i].naptr.order)
++						&& context->naptr_rrs[k].sort_pos > context->naptr_rrs[i].sort_pos)
++					|| (ntohs(context->naptr_rrs[k].naptr.order) > ntohs(context->naptr_rrs[i].naptr.order)
++						&& context->naptr_rrs[k].sort_pos < context->naptr_rrs[i].sort_pos)){
++					z = context->naptr_rrs[k].sort_pos;
++					context->naptr_rrs[k].sort_pos = context->naptr_rrs[i].sort_pos;
++					context->naptr_rrs[i].sort_pos = z;
+ 					continue;
+ 				}
+-				if (ntohs(context.naptr_rrs[k].naptr.order) == ntohs(context.naptr_rrs[i].naptr.order)) {
+-					if ((ntohs(context.naptr_rrs[k].naptr.pref) < ntohs(context.naptr_rrs[i].naptr.pref)
+-							&& context.naptr_rrs[k].sort_pos > context.naptr_rrs[i].sort_pos)
+-						|| (ntohs(context.naptr_rrs[k].naptr.pref) > ntohs(context.naptr_rrs[i].naptr.pref)
+-							&& context.naptr_rrs[k].sort_pos < context.naptr_rrs[i].sort_pos)){
+-						z = context.naptr_rrs[k].sort_pos;
+-						context.naptr_rrs[k].sort_pos = context.naptr_rrs[i].sort_pos;
+-						context.naptr_rrs[i].sort_pos = z;
++				if (ntohs(context->naptr_rrs[k].naptr.order) == ntohs(context->naptr_rrs[i].naptr.order)) {
++					if ((ntohs(context->naptr_rrs[k].naptr.pref) < ntohs(context->naptr_rrs[i].naptr.pref)
++							&& context->naptr_rrs[k].sort_pos > context->naptr_rrs[i].sort_pos)
++						|| (ntohs(context->naptr_rrs[k].naptr.pref) > ntohs(context->naptr_rrs[i].naptr.pref)
++							&& context->naptr_rrs[k].sort_pos < context->naptr_rrs[i].sort_pos)){
++						z = context->naptr_rrs[k].sort_pos;
++						context->naptr_rrs[k].sort_pos = context->naptr_rrs[i].sort_pos;
++						context->naptr_rrs[i].sort_pos = z;
+ 					}
+ 				}
+ 			}
+ 		}
+-		for (k = 0; k < context.naptr_rrs_count; k++) {
+-			if (context.naptr_rrs[k].sort_pos == context.position-1) {
+-				ast_copy_string(context.dst, context.naptr_rrs[k].result, dstlen);
+-				ast_copy_string(context.tech, context.naptr_rrs[k].tech, techlen);
++		for (k = 0; k < context->naptr_rrs_count; k++) {
++			if (context->naptr_rrs[k].sort_pos == context->position-1) {
++				ast_copy_string(context->dst, context->naptr_rrs[k].result, dstlen);
++				ast_copy_string(context->tech, context->naptr_rrs[k].tech, techlen);
+ 				break;
+ 			}
+ 		}
+-	} else if (!(context.options & ENUMLOOKUP_OPTIONS_COUNT)) {
+-		context.dst[0] = 0;
++	} else if (!(context->options & ENUMLOOKUP_OPTIONS_COUNT)) {
++		context->dst[0] = 0;
+ 	}
+ 	if (chan)
+ 		ret |= ast_autoservice_stop(chan);
+ 
+-	for (k = 0; k < context.naptr_rrs_count; k++) {
+-		free(context.naptr_rrs[k].result);
+-		free(context.naptr_rrs[k].tech);
+-	}
++	if (!argcontext) {
++		for (k = 0; k < context->naptr_rrs_count; k++) {
++			free(context->naptr_rrs[k].result);
++			free(context->naptr_rrs[k].tech);
++		}
++		free(context->naptr_rrs);
++		free(context);
++	} else
++		*argcontext = context;
+ 
+-	free(context.naptr_rrs);
+-
+ 	return ret;
+ }
+ 
