@@ -36,5 +36,16 @@ allow you to do a single DUNDi query from the dialplan, and then iterate through
 all of the results.
 --------------------------------------------------------------------------------
 
+--------------------------------------------------------------------------------
+File: dundi_dynamic_weights.patch.txt
+
+Description: This patch allows the weight section of DUNDi mappings to be
+dynamic.  This means that instead of the mapping having a static weight value,
+the weight that is provided in a DUNDi response can be retrieved from a global
+variable, or by running dialplan functions.  For example, the SHELL() function
+could be used to run a script to determine what the weight should be based on
+some current system status.
+--------------------------------------------------------------------------------
+
 ================================================================================
 ================================================================================
