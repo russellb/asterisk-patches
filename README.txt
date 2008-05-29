@@ -1,7 +1,18 @@
 ================================================================================
 === Asterisk 1.4 Backports
-=== Russell Bryant <russell@digium.com
+=== Russell Bryant <russell@digium.com>
 ================================================================================
+
+--------------------------------------------------------------------------------
+File: func_speex/*
+
+Description: DENOISE() and AGC() dialplan functions to apply noise reduction
+and automatic gain control to channels.  These are especially useful for analog
+lines.
+
+There is a patch that must be applied to the source tree, and a module that is
+just dropped into the funcs directory.
+--------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
 File: func_devstate-1.4/func_devstate.c
