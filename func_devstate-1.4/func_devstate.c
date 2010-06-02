@@ -45,6 +45,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static const char astdb_family[] = "CustomDevstate";
 
+static char devstate_change_cli_usage[] =
+"Usage: devstate device state\n"
+"       Generate a device state change event given the input parameters.\n"
+"       Mainly used for lighting the LEDs on the snoms.\n";
+
 static const char *ast_devstate_str(int state)
 {
 	const char *res = "UNKNOWN";
@@ -142,6 +147,8 @@ static int custom_devstate_callback(const char *data)
 	return ast_devstate_val(buf);
 }
 
+
+
 static int cli_funcdevstate_list(int fd, int argc, char *argv[])
 {
 	struct ast_db_entry *db_entry, *db_tree;
@@ -174,24 +181,61 @@ static int cli_funcdevstate_list(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
+static int cli_funcdevstate_change(int fd, int argc, char *argv[])
+{
+    size_t len;
+	const char *dev, *state;
+	enum ast_device_state state_val;
+
+	if (argc != 4)
+		return RESULT_SHOWUSAGE;
+
+	len = strlen("Custom:");
+	dev = argv[argc-2];
+	state = argv[argc-1];
+
+	if (strncasecmp(dev, "Custom:", len)) {
+		ast_cli(fd, "The devstate command can only be used to set 'Custom:' device state!\n");
+		return RESULT_FAILURE;
+	}
+
+	dev += len;
+	if (ast_strlen_zero(dev))
+		return RESULT_SHOWUSAGE;
+
+	state_val = ast_devstate_val(state);
+
+	if (state_val == AST_DEVICE_UNKNOWN)
+		return RESULT_SHOWUSAGE;
+
+	ast_cli(fd, "Changing %s to %s\n", dev, state);
+
+	ast_db_put(astdb_family, dev, (char *) state);
+
+	ast_device_state_changed("Custom:%s", dev);
+
+	return RESULT_SUCCESS;
+}
+
 static struct ast_cli_entry cli_funcdevstate[] = {
-	{ { "funcdevstate", "list", }, cli_funcdevstate_list, NULL, NULL },
+	{ { "devstate", "list", }, cli_funcdevstate_list, NULL, NULL },
+	{ { "devstate", "change", }, cli_funcdevstate_change, "Set the device state on one of the custom \"pseudo devices\".", devstate_change_cli_usage },
 };
 
 static struct ast_custom_function devstate_function = {
-	.name = "DEVSTATE",
+	.name = "DEVICE_STATE",
 	.synopsis = "Get or Set a device state",
-	.syntax = "DEVSTATE(device)",
+	.syntax = "DEVICE_STATE(device)",
 	.desc =
-	"  The DEVSTATE function can be used to retrieve the device state from any\n"
+	"  The DEVICE_STATE function can be used to retrieve the device state from any\n"
 	"device state provider.  For example:\n"
-	"   NoOp(SIP/mypeer has state ${DEVSTATE(SIP/mypeer)})\n"
-	"   NoOp(Conference number 1234 has state ${DEVSTATE(MeetMe:1234)})\n"
+	"   NoOp(SIP/mypeer has state ${DEVICE_STATE(SIP/mypeer)})\n"
+	"   NoOp(Conference number 1234 has state ${DEVICE_STATE(MeetMe:1234)})\n"
 	"\n"
 	"  The DEVSTATE function can also be used to set custom device state from\n"
 	"the dialplan.  The \"Custom:\" prefix must be used.  For example:\n"
-	"  Set(DEVSTATE(Custom:lamp1)=BUSY)\n"
-	"  Set(DEVSTATE(Custom:lamp2)=NOT_INUSE)\n"
+	"  Set(DEVICE_STATE(Custom:lamp1)=BUSY)\n"
+	"  Set(DEVICE_STATE(Custom:lamp2)=NOT_INUSE)\n"
 	"You can subscribe to the status of a custom device state using a hint in\n"
 	"the dialplan:\n"
 	"  exten => 1234,hint,Custom:lamp1\n"
