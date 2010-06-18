@@ -183,9 +183,9 @@ static int cli_funcdevstate_list(int fd, int argc, char *argv[])
 
 static int cli_funcdevstate_change(int fd, int argc, char *argv[])
 {
-    size_t len;
+	size_t len;
 	const char *dev, *state;
-	enum ast_device_state state_val;
+	int state_val;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
