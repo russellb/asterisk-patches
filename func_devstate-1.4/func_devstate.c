@@ -122,12 +122,12 @@ static int devstate_write(struct ast_channel *chan, char *function,
 	size_t len = strlen("Custom:");
 
 	if (strncasecmp(data, "Custom:", len)) {
-		ast_log(LOG_WARNING, "The DEVSTATE function can only be used to set 'Custom:' device state!\n");
+		ast_log(LOG_WARNING, "The DEVICE_STATE function can only be used to set 'Custom:' device state!\n");
 		return -1;
 	}
 	data += len;
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "DEVSTATE function called with no custom device name!\n");
+		ast_log(LOG_WARNING, "DEVICE_STATE function called with no custom device name!\n");
 		return -1;
 	}
 
@@ -232,7 +232,7 @@ static struct ast_custom_function devstate_function = {
 	"   NoOp(SIP/mypeer has state ${DEVICE_STATE(SIP/mypeer)})\n"
 	"   NoOp(Conference number 1234 has state ${DEVICE_STATE(MeetMe:1234)})\n"
 	"\n"
-	"  The DEVSTATE function can also be used to set custom device state from\n"
+	"  The DEVICE_STATE function can also be used to set custom device state from\n"
 	"the dialplan.  The \"Custom:\" prefix must be used.  For example:\n"
 	"  Set(DEVICE_STATE(Custom:lamp1)=BUSY)\n"
 	"  Set(DEVICE_STATE(Custom:lamp2)=NOT_INUSE)\n"
