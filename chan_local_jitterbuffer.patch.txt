@@ -1,10 +1,10 @@
 Index: channels/chan_local.c
 ===================================================================
---- channels/chan_local.c	(revision 84776)
+--- channels/chan_local.c	(revision 308205)
 +++ channels/chan_local.c	(working copy)
-@@ -66,6 +66,13 @@
+@@ -74,6 +74,13 @@
  
- #define IS_OUTBOUND(a,b) (a == b->chan ? 1 : 0)
+ static struct ao2_container *locals;
  
 +static struct ast_jb_conf g_jb_conf = {
 +	.flags = 0,
@@ -16,7 +16,7 @@ Index: channels/chan_local.c
  static struct ast_channel *local_request(const char *type, int format, void *data, int *cause);
  static int local_digit_begin(struct ast_channel *ast, char digit);
  static int local_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
-@@ -108,6 +115,7 @@
+@@ -117,6 +124,7 @@
  	char context[AST_MAX_CONTEXT];		/* Context to call */
  	char exten[AST_MAX_EXTENSION];		/* Extension to call */
  	int reqformat;				/* Requested format */
@@ -24,8 +24,8 @@ Index: channels/chan_local.c
  	struct ast_channel *owner;		/* Master Channel */
  	struct ast_channel *chan;		/* Outbound channel */
  	struct ast_module_user *u_owner;	/*! reference to keep the module loaded while in use */
-@@ -551,11 +559,21 @@
- 	ast_mutex_init(&tmp->lock);
+@@ -748,6 +756,8 @@
+ 	/* Initialize private structure information */
  	ast_copy_string(tmp->exten, data, sizeof(tmp->exten));
  
 +	memcpy(&tmp->jb_conf, &g_jb_conf, sizeof(tmp->jb_conf));
@@ -33,8 +33,10 @@ Index: channels/chan_local.c
  	/* Look for options */
  	if ((opts = strchr(tmp->exten, '/'))) {
  		*opts++ = '\0';
- 		if (strchr(opts, 'n'))
+@@ -755,6 +765,14 @@
  			ast_set_flag(tmp, LOCAL_NO_OPTIMIZATION);
+ 		if (strchr(opts, 'm'))
+ 			ast_set_flag(tmp, LOCAL_MOH_PASSTHRU);
 +		if (strchr(opts, 'j')) {
 +			if (ast_test_flag(tmp, LOCAL_NO_OPTIMIZATION))
 +				ast_set_flag(&tmp->jb_conf, AST_JB_ENABLED);
@@ -46,7 +48,7 @@ Index: channels/chan_local.c
  	}
  
  	/* Look for a context */
-@@ -640,6 +658,8 @@
+@@ -841,6 +859,8 @@
  	tmp->priority = 1;
  	tmp2->priority = 1;
  
