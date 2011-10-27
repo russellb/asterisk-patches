@@ -1,5 +1,5 @@
 diff --git a/apps/app_queue.c b/apps/app_queue.c
-index 1349d04..b51e7b9 100644
+index 1349d04..9895494 100644
 --- a/apps/app_queue.c
 +++ b/apps/app_queue.c
 @@ -1185,10 +1185,97 @@ static AST_LIST_HEAD_STATIC(rule_lists, rule_list);
@@ -88,13 +88,13 @@ index 1349d04..b51e7b9 100644
 +static int check_queue_wrapup_blocker(struct member *mem)
 +{
 +	char buf[1024];
-+	char workspace[1024] = "";
++	enum ast_device_state state;
 +
 +	make_devstate_str(buf, sizeof(buf), S_OR(mem->state_interface, mem->interface));
 +
-+	ast_func_read(NULL, buf, workspace, sizeof(workspace));
++	state = ast_device_state(buf);
 +
-+	return !strcasecmp(workspace, "INUSE");
++	return state == AST_DEVICE_INUSE;
 +}
 +
  /*! \brief sets the QUEUESTATUS channel variable */
