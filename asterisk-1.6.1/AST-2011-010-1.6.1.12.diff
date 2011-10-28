@@ -1,0 +1,60 @@
+Index: channels/chan_iax2.c
+===================================================================
+--- channels/chan_iax2.c	(revision 332019)
++++ channels/chan_iax2.c	(working copy)
+@@ -4942,7 +4942,14 @@
+ 		/* these two cannot be sent, because they require a result */
+ 		errno = ENOSYS;
+ 		return -1;
+-	default:
++ 	/* These options are sent to the other side across the network where
++ 	 * they will be passed to whatever channel is bridged there. Don't
++ 	 * do anything silly like pass an option that transmits pointers to
++ 	 * memory on this machine to a remote machine to use */
++ 	case AST_OPTION_TONE_VERIFY:
++ 	case AST_OPTION_TDD:
++ 	case AST_OPTION_RELAXDTMF:
++ 	case AST_OPTION_AUDIO_MODE:
+ 	{
+ 		unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
+ 		struct chan_iax2_pvt *pvt;
+@@ -4970,7 +4977,12 @@
+ 		ast_free(h);
+ 		return res;
+ 	}
++	default:
++		return -1;
+ 	}
++
++	/* Just in case someone does a break instead of a return */
++	return -1;
+ }
+ 
+ static struct ast_frame *iax2_read(struct ast_channel *c) 
+Index: main/features.c
+===================================================================
+--- main/features.c	(revision 332019)
++++ main/features.c	(working copy)
+@@ -2646,10 +2646,19 @@
+ 				break;
+ 			case AST_CONTROL_OPTION:
+ 				aoh = f->data.ptr;
+-				/* Forward option Requests */
++				/* Forward option Requests, but only ones we know are safe
++				 * These are ONLY sent by chan_iax2 and I'm not convinced that
++				 * they are useful. I haven't deleted them entirely because I
++				 * just am not sure of the ramifications of removing them. */
+ 				if (aoh && aoh->flag == AST_OPTION_FLAG_REQUEST) {
+-					ast_channel_setoption(other, ntohs(aoh->option), aoh->data, 
+-						f->datalen - sizeof(struct ast_option_header), 0);
++				   	switch (ntohs(aoh->option)) {
++					case AST_OPTION_TONE_VERIFY:
++					case AST_OPTION_TDD:
++					case AST_OPTION_RELAXDTMF:
++					case AST_OPTION_AUDIO_MODE:
++						ast_channel_setoption(other, ntohs(aoh->option), aoh->data, 
++							f->datalen - sizeof(struct ast_option_header), 0);
++					}
+ 				}
+ 				break;
+ 			}
