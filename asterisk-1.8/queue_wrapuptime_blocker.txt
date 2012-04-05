@@ -1,5 +1,18 @@
+From f75c80f7cd85c1d178e07de91a25e23a683b27c1 Mon Sep 17 00:00:00 2001
+From: Russell Bryant <russell@russellbryant.net>
+Date: Fri, 30 Mar 2012 19:26:42 -0400
+Subject: [PATCH] Queue wrapuptime blocker
+
+---
+ apps/app_queue.c         |  185 ++++++++++++++++++++++++++++++++++++++++++++-
+ include/asterisk/event.h |    2 +
+ include/asterisk/sched.h |    4 +
+ main/event.c             |   18 +++++
+ main/sched.c             |   18 +++++
+ 5 files changed, 222 insertions(+), 5 deletions(-)
+
 diff --git a/apps/app_queue.c b/apps/app_queue.c
-index 1349d04..9895494 100644
+index ec13935..4aacd59 100644
 --- a/apps/app_queue.c
 +++ b/apps/app_queue.c
 @@ -1185,10 +1185,97 @@ static AST_LIST_HEAD_STATIC(rule_lists, rule_list);
@@ -108,9 +121,9 @@ index 1349d04..9895494 100644
 +				ast_debug(4, "%s is unavailable because the wrapup blocker is active.\n", member->membername);
 +				break;
  			} else {
- 				ao2_unlock(q);
  				ao2_ref(member, -1);
-@@ -2869,7 +2959,7 @@ static int num_available_members(struct call_queue *q)
+ 				ao2_iterator_destroy(&mem_iter);
+@@ -2868,7 +2958,7 @@ static int num_available_members(struct call_queue *q)
  			/* else fall through */
  		case AST_DEVICE_NOT_INUSE:
  		case AST_DEVICE_UNKNOWN:
@@ -119,7 +132,7 @@ index 1349d04..9895494 100644
  				avl++;
  			}
  			break;
-@@ -3019,6 +3109,14 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
+@@ -3018,6 +3108,14 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
  		return 0;
  	}
  
@@ -134,15 +147,13 @@ index 1349d04..9895494 100644
  	if (tmp->member->paused) {
  		ast_debug(1, "%s paused, can't receive call\n", tmp->interface);
  		if (qe->chan->cdr)
-@@ -3647,6 +3745,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
- 						case AST_CONTROL_ANSWER:
- 							/* This is our guy if someone answered. */
- 							if (!peer) {
-+								member_answered_hook(o->member);
- 								ast_verb(3, "%s answered %s\n", ochan_name, inchan_name);
- 								if (update_connectedline) {
- 									if (o->pending_connected_update) {
-@@ -5035,6 +5134,8 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
+@@ -5035,10 +5133,14 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
+ 			queue_t_ref(qe->parent, "For bridge_config reference");
+ 		}
+ 
++		member_answered_hook(member);
++
+ 		time(&callstart);
  		transfer_ds = setup_transfer_datastore(qe, member, callstart, callcompletedinsl);
  		bridge = ast_bridge_call(qe->chan,peer, &bridge_config);
  
@@ -151,7 +162,7 @@ index 1349d04..9895494 100644
  		/* If the queue member did an attended transfer, then the TRANSFER already was logged in the queue_log
  		 * when the masquerade occurred. These other "ending" queue_log messages are unnecessary, except for
  		 * the AgentComplete manager event
-@@ -6185,7 +6286,7 @@ static int queue_function_qac(struct ast_channel *chan, const char *cmd, char *d
+@@ -6189,7 +6291,7 @@ static int queue_function_qac(struct ast_channel *chan, const char *cmd, char *d
  			mem_iter = ao2_iterator_init(q->members, 0);
  			while ((m = ao2_iterator_next(&mem_iter))) {
  				/* Count the agents who are logged in and presently answering calls */
@@ -160,7 +171,7 @@ index 1349d04..9895494 100644
  					count++;
  				}
  				ao2_ref(m, -1);
-@@ -6197,7 +6298,7 @@ static int queue_function_qac(struct ast_channel *chan, const char *cmd, char *d
+@@ -6201,7 +6303,7 @@ static int queue_function_qac(struct ast_channel *chan, const char *cmd, char *d
  			mem_iter = ao2_iterator_init(q->members, 0);
  			while ((m = ao2_iterator_next(&mem_iter))) {
  				/* Count the agents who are logged in, not paused and not wrapping up */
@@ -169,7 +180,7 @@ index 1349d04..9895494 100644
  						!(m->lastcall && q->wrapuptime && ((now - q->wrapuptime) < m->lastcall))) {
  					count++;
  				}
-@@ -6244,7 +6345,7 @@ static int queue_function_qac_dep(struct ast_channel *chan, const char *cmd, cha
+@@ -6248,7 +6350,7 @@ static int queue_function_qac_dep(struct ast_channel *chan, const char *cmd, cha
  		mem_iter = ao2_iterator_init(q->members, 0);
  		while ((m = ao2_iterator_next(&mem_iter))) {
  			/* Count the agents who are logged in and presently answering calls */
@@ -178,7 +189,7 @@ index 1349d04..9895494 100644
  				count++;
  			}
  			ao2_ref(m, -1);
-@@ -7139,7 +7240,7 @@ static int manager_queues_summary(struct mansession *s, const struct message *m)
+@@ -7146,7 +7248,7 @@ static int manager_queues_summary(struct mansession *s, const struct message *m)
  			while ((mem = ao2_iterator_next(&mem_iter))) {
  				if ((mem->status != AST_DEVICE_UNAVAILABLE) && (mem->status != AST_DEVICE_INVALID)) {
  					++qmemcount;
@@ -187,7 +198,84 @@ index 1349d04..9895494 100644
  						++qmemavail;
  					}
  				}
-@@ -8303,6 +8404,8 @@ static int unload_module(void)
+@@ -7911,6 +8013,67 @@ static char *handle_queue_reset(struct ast_cli_entry *e, int cmd, struct ast_cli
+ 	return CLI_SUCCESS;
+ }
+ 
++static void sched_dump_cb(void *data, ast_sched_cb cb, const void *sched_data, struct timeval delta)
++{
++	struct ast_cli_args *a = data;
++
++	ast_cli(a->fd, "%s | %.6ld : %.6ld\n",
++			(const char *) sched_data,
++			(long) delta.tv_sec,
++			(long) delta.tv_usec / 1000);
++}
++
++static char *handle_queue_sched_dump(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
++{
++	switch (cmd) {
++	case CLI_INIT:
++		e->command = "queue sched dump";
++		e->usage =
++			"Usage: queue sched dump\n"
++			"\n"
++			"Dump app_queue scheduler contents to DEBUG log\n";
++		return NULL;
++	case CLI_GENERATE:
++		return NULL;
++	}
++
++	if (a->argc != e->args) {
++		return CLI_SHOWUSAGE;
++	}
++
++	ast_cli(a->fd, "Device | Time left blocked (sec:ms)\n");
++	ast_cli(a->fd, "-----------------------------------\n");
++	ast_sched_dump_cb(ast_sched_thread_get_context(sched_thread), sched_dump_cb, a);
++	ast_cli(a->fd, "\n");
++
++	return CLI_SUCCESS;
++}
++
++static char *handle_queue_wrapupblocker_reset(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
++{
++	switch (cmd) {
++	case CLI_INIT:
++		e->command = "queue wrapupblocker reset";
++		e->usage =
++			"Usage: queue wrapupblocker reset\n"
++			"\n"
++			"Reset the queue wrapuptime blocker\n";
++		return NULL;
++	case CLI_GENERATE:
++		return NULL;
++	}
++
++	if (a->argc != e->args) {
++		return CLI_SHOWUSAGE;
++	}
++
++	ast_event_erase_devstate_cache("QueueWrapupBlocker");
++
++	ast_cli(a->fd, "Queue wrapuptime blocker cache reset.\n");
++
++	return CLI_SUCCESS;
++}
++
+ static char *handle_queue_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+ {
+ 	struct ast_flags mask = {0,};
+@@ -7987,6 +8150,8 @@ static struct ast_cli_entry cli_queue[] = {
+ 	AST_CLI_DEFINE(handle_queue_rule_show, "Show the rules defined in queuerules.conf"),
+ 	AST_CLI_DEFINE(handle_queue_reload, "Reload queues, members, queue rules, or parameters"),
+ 	AST_CLI_DEFINE(handle_queue_reset, "Reset statistics for a queue"),
++	AST_CLI_DEFINE(handle_queue_sched_dump, "Dump app_queue scheduler contents to DEBUG log"),
++	AST_CLI_DEFINE(handle_queue_wrapupblocker_reset, "Reset queue wrapupblocker"),
+ };
+ 
+ /* struct call_queue astdata mapping. */
+@@ -8311,6 +8476,8 @@ static int unload_module(void)
  	ao2_ref(queues, -1);
  	devicestate_tps = ast_taskprocessor_unreference(devicestate_tps);
  	ast_unload_realtime("queue_members");
@@ -196,7 +284,7 @@ index 1349d04..9895494 100644
  	return res;
  }
  
-@@ -8312,6 +8415,14 @@ static int load_module(void)
+@@ -8320,6 +8487,14 @@ static int load_module(void)
  	struct ast_context *con;
  	struct ast_flags mask = {AST_FLAGS_ALL, };
  
@@ -211,3 +299,92 @@ index 1349d04..9895494 100644
  	queues = ao2_container_alloc(MAX_QUEUE_BUCKETS, queue_hash_cb, queue_cmp_cb);
  
  	use_weight = 0;
+diff --git a/include/asterisk/event.h b/include/asterisk/event.h
+index 90e27b2..8f224b9 100644
+--- a/include/asterisk/event.h
++++ b/include/asterisk/event.h
+@@ -750,6 +750,8 @@ uint16_t ast_event_iterator_get_ie_raw_payload_len(struct ast_event_iterator *it
+  */
+ size_t ast_event_minimum_length(void);
+ 
++void ast_event_erase_devstate_cache(const char *prefix);
++
+ #if defined(__cplusplus) || defined(c_plusplus)
+ }
+ #endif
+diff --git a/include/asterisk/sched.h b/include/asterisk/sched.h
+index 4f5fb42..bbf3c2a 100644
+--- a/include/asterisk/sched.h
++++ b/include/asterisk/sched.h
+@@ -282,6 +282,10 @@ int ast_sched_runq(struct sched_context *con);
+  */
+ void ast_sched_dump(struct sched_context *con);
+ 
++typedef void (*ast_sched_dump_cb_fn)(void *data, ast_sched_cb cb, const void *sched_data, struct timeval delta);
++
++void ast_sched_dump_cb(struct sched_context *con, ast_sched_dump_cb_fn cb, void *data);
++
+ /*! \brief Returns the number of seconds before an event takes place
+  * \param con Context to use
+  * \param id Id to dump
+diff --git a/main/event.c b/main/event.c
+index e8af16a..6fc65f7 100644
+--- a/main/event.c
++++ b/main/event.c
+@@ -1768,6 +1768,24 @@ static char *event_dump_cache(struct ast_cli_entry *e, int cmd, struct ast_cli_a
+ 	return CLI_SUCCESS;
+ }
+ 
++static int match_device_prefix(void *obj, void *arg, int flags)
++{
++	struct ast_event_ref *event_ref = obj;
++	const char *prefix = arg;
++	const char *device;
++
++	device = ast_event_get_ie_str(event_ref->event, AST_EVENT_IE_DEVICE);
++
++	return strncasecmp(device, prefix, strlen(prefix)) ? 0 : CMP_MATCH;
++}
++
++void ast_event_erase_devstate_cache(const char *prefix)
++{
++	ao2_callback(ast_event_cache[AST_EVENT_DEVICE_STATE].container, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, match_device_prefix, (void *) prefix);
++	ao2_callback(ast_event_cache[AST_EVENT_DEVICE_STATE_CHANGE].container, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, match_device_prefix, (void *) prefix);
++}
++
++
+ static struct ast_cli_entry event_cli[] = {
+ 	AST_CLI_DEFINE(event_dump_cache, "Dump the internal event cache (for debugging)"),
+ };
+diff --git a/main/sched.c b/main/sched.c
+index b27358c..90fbc08 100644
+--- a/main/sched.c
++++ b/main/sched.c
+@@ -590,6 +590,24 @@ void ast_sched_dump(struct sched_context *con)
+ 	ast_debug(1, "=============================================================\n");
+ }
+ 
++void ast_sched_dump_cb(struct sched_context *con, ast_sched_dump_cb_fn cb, void *data)
++{
++	struct sched *q;
++	struct timeval when = ast_tvnow();
++	int x;
++	size_t heap_size;
++
++	ast_mutex_lock(&con->lock);
++	heap_size = ast_heap_size(con->sched_heap);
++	for (x = 1; x <= heap_size; x++) {
++		struct timeval delta;
++		q = ast_heap_peek(con->sched_heap, x);
++		delta = ast_tvsub(q->when, when);
++		cb(data, q->callback, q->data, delta);
++	}
++	ast_mutex_unlock(&con->lock);
++}
++
+ /*! \brief
+  * Launch all events which need to be run at this time.
+  */
+-- 
+1.7.7.6
+
