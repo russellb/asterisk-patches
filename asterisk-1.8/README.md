@@ -7,3 +7,7 @@ on multiple servers as well as the distributed device state functionality.  They
 wanted to ensure that wrapuptime for an agent was honored across the cluster of
 servers.  Once an agent has taken a call on one server, no other Asterisk server
 will send that agent a call until the wrapuptime has expired.
+
+# ```corosync-1.8.diff```
+
+Backport of res_corosync.
